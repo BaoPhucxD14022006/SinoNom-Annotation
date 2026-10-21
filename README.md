@@ -132,6 +132,25 @@ python gradio/app.py --config configs/tap_1.json \
 
 Open the URL printed in the terminal. Add `--skip-detection` for manual boxes or `--share` for a public Gradio link. Results are saved under `annotations/student_001`; **Download All** creates `annotations.zip`. Download saved results before ending a Kaggle session.
 
+### Running on Windows (Without ML Model) & JSON Box / Progress Workflow
+
+On Windows (or any machine without CUDA / ML models), install only `gradio/requirements.txt`:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r gradio/requirements.txt
+python gradio/app.py --config configs/tap_1.json `
+  --image-dir input/data-student/student_001 `
+  --source-json input/data-student/student_001/student_001.json `
+  --output-dir annotations/student_001
+```
+
+- **Upload box JSON / ZIP (Step 1):** Upload a single `.json` file (either a single image object or a top-level array of image objects) or a `.zip` containing `.json` files with predicted bounding boxes (`{"image": "12305.jpg", "bounding_boxes": {"1": {"bbox": [x1, y1, x2, y2], "status": "intact"}}}`). When advancing from Step 2 to Step 3 (*Next*), uploaded boxes are automatically loaded for images that have not yet been saved. In Step 3, click **Load Boxes from JSON** to reload or overwrite boxes from the uploaded JSON.
+- **Save Progress / Load Progress (Header):**
+  - **Save Progress** downloads `progress_<timestamp>.zip`, which preserves all saved annotations, source mismatches, verified content, `.state/` drafts, and uploaded detection boxes.
+  - **Load Progress** restores a `progress_<timestamp>.zip` archive (or a final `annotations.zip` export archive, automatically splitting its arrays back into per-image files) after backing up any existing files in `output_dir/.backup/<timestamp>/`.
+
 ## JSON Output
 
 `annotations.zip` contains `text_annotations.json`, `inscription_content.json`, and `source_mismatches.json`. Each file contains a **top-level JSON array of objects** with zero, one, or multiple records. Each record represents one inscription image or face, identified by `image`. Empty categories are `[]`. Match records by `image`, not by array position. The examples below use illustrative 1000 × 1000 images.

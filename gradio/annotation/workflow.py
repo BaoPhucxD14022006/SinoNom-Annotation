@@ -32,6 +32,7 @@ from .io import (atomic_write, final_document,
                  canonical_issue_type, validate_document,
                  validate_source_mismatch_type)
 from .detection_adapter import detect
+from .detection_import import has_detection
 from crop.crop import (crop_bbox, default_crop,
                        validate_crop_coordinates, validate_resized_image_size)
 
@@ -434,7 +435,9 @@ class Workflow:
             if step != 3:
                 raise ValueError('Edit bounding boxes in Step 3.')
             if action == 'detect':
-                if getattr(self.options, 'skip_detection', False):
+                output_dir = getattr(self.options, 'output_dir', None)
+                has_uploaded_boxes = bool(output_dir and has_detection(s['image'], output_dir))
+                if getattr(self.options, 'skip_detection', False) and not has_uploaded_boxes:
                     raise ValueError('Detection is disabled (--skip-detection). Draw boxes manually.')
                 # Detection IDs are discarded; Gradio owns hidden region identity.
                 doc = detect(s['image_path'], self.options)

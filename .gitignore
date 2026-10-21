@@ -230,6 +230,14 @@ __marimo__/
 /annotations/
 annotations.zip
 *.zip.tmp
+annotations*.zip
+progress_*.zip
+.state/
+.backup/
+implementation_plan.md
+/images/
+student_*.json
+*.ipynb
 
 # External detection checkpoints, packaged executables and preprocessed images
 # are ignored by text_detection/models/.gitignore and

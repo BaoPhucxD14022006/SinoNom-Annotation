@@ -23,6 +23,10 @@ from annotation.text_alignment import count_annotation_characters
 from annotation.export import (collect_annotations, collect_content_documents,
                                collect_source_mismatches,
                                save_export_archive)
+from annotation.detection_adapter import model_assets_available
+from annotation.detection_import import (count_stored_detections, has_detection,
+                                         parse_detection_upload, store_detections)
+from annotation.progress import build_progress_archive, restore_progress_archive
 from ui.editor import snapshot, source_text, SCRIPT, CSS
 from ui.presentation import (APP_CSS, app_identity, workflow_progress,
                              panel_heading, panel_summary, footer,
@@ -277,6 +281,8 @@ def parser():
                    help='Override config gradio.output_dir.')
     p.add_argument('--skip-detection', action='store_true',
                    help='Disable detection; load existing annotations or draw boxes manually.')
+    p.add_argument('--detection-source', choices=('json', 'model'), default='json',
+                   help='Detection source: precomputed JSON boxes (default) or ML model.')
     p.add_argument('--vague-det-config', default=str(REPO_ROOT / 'text_detection/models/ckpts/damage_detect.py'))
     p.add_argument('--vague-det-weights', default=str(REPO_ROOT / 'text_detection/models/ckpts/damage_detect.pth'))
     p.add_argument('--ocr-det-executable', default=str(REPO_ROOT / 'text_detection/models/dists/det_model/det_model'))
@@ -301,6 +307,7 @@ def create_app(options):
     if hasattr(gr, 'set_static_paths'):
         gr.set_static_paths(paths=[engine.preview_dir])
     skip_detection=getattr(options,'skip_detection',False)
+    detection_source=getattr(options,'detection_source','json')
     startup=''
     try:
         images=load_image_list(options.image_dir)
@@ -317,6 +324,27 @@ def create_app(options):
             for image in images
         )
 
+    def has_progress_records():
+        output=Path(options.output_dir)
+        return (has_saved_image_records()
+                or (output/'.state'/'content.json').is_file()
+                or count_stored_detections(images,output) > 0)
+
+    def detection_status_text():
+        loaded=count_stored_detections(images,options.output_dir)
+        return f'Đã nạp box cho {loaded}/{len(images)} ảnh.'
+
+    def _uploaded_path(uploaded):
+        if uploaded is None:
+            return None
+        if isinstance(uploaded,(str,Path)):
+            return Path(uploaded)
+        if isinstance(uploaded,dict) and 'path' in uploaded:
+            return Path(uploaded['path'])
+        if hasattr(uploaded,'name'):
+            return Path(uploaded.name)
+        return Path(str(uploaded))
+
     initial=dict(active=new_state(), drafts={})
     with gr.Blocks(title='Sino-Nôm Annotation Tool', fill_width=True, analytics_enabled=False) as app:
         session=gr.State(initial)
@@ -326,6 +354,12 @@ def create_app(options):
                 with gr.Row(elem_id='header-actions', scale=0):
                     history_open=gr.Button('History', elem_id='history-open',
                                            elem_classes=['icon-button'], scale=0)
+                    load_progress_btn=gr.UploadButton('Load Progress', file_types=['.zip'],
+                                                      elem_id='load-progress',
+                                                      elem_classes=['icon-button'], scale=0)
+                    save_progress_btn=gr.Button('Save Progress', elem_id='save-progress',
+                                                elem_classes=['icon-button'], scale=0,
+                                                interactive=has_progress_records())
                     save_all=gr.Button('Download All', variant='primary', scale=0,
                                         elem_id='save-all',
                                         interactive=has_saved_image_records())
@@ -360,6 +394,12 @@ def create_app(options):
                 gr.Markdown('Choose an inscription image to begin or reopen saved annotation data.')
                 image_choice=gr.Dropdown(choices=[(p.name,str(p.resolve())) for p in images],label='Image')
                 open_button=gr.Button('Start Verification', variant='primary')
+                with gr.Group(elem_id='detection-upload-group', elem_classes=['section']):
+                    box_upload=gr.UploadButton(
+                        'Upload box JSON / ZIP', file_types=['.json', '.zip'],
+                        elem_id='upload-detection-boxes', variant='secondary')
+                    detection_status=gr.Markdown(
+                        detection_status_text(), elem_id='detection-upload-status')
             with gr.Column(visible=False, elem_id='control-panel', min_width=0,
                            elem_classes='panel') as control_panel:
                 heading=gr.HTML(panel_heading(initial['active']))
@@ -405,8 +445,12 @@ def create_app(options):
                     delete=gr.Button('Delete Selected', size='sm', min_width=0,
                                      elem_id='delete-box')
                     detect_confirm=gr.Checkbox(value=False,visible=False)
-                    detect=gr.Button('Run Detection', variant='primary',
-                                     interactive=not skip_detection,elem_id='run-detection')
+                    detect_label=('Load Boxes from JSON'
+                                  if (detection_source == 'json' or skip_detection)
+                                  else 'Run Detection')
+                    detect=gr.Button(detect_label, variant='primary',
+                                     interactive=(detection_source == 'json' or not skip_detection),elem_id='run-detection')
+
                     with gr.Group(visible=False,
                                   elem_classes=['section','sidebar-section','sidebar-component','mismatch-panel']) as mismatch_group:
                         gr.Markdown('### Box-Content Validation')
@@ -522,6 +566,7 @@ def create_app(options):
         ])
         outputs.append(save_all)
         outputs.append(image_choice)
+        outputs.extend([save_progress_btn, detection_status, detect])
 
         def render(ctx, msg=''):
             if msg:
@@ -591,6 +636,16 @@ def create_app(options):
                     gr.update(visible=step==7 and bool(source_mismatch_json))]
             rendered.append(gr.update(interactive=has_saved_image_records()))
             rendered.append(gr.update(value=s.get('image_path') if step == 1 else None))
+            has_json_for_active=bool(has and has_detection(s.get('image'),options.output_dir))
+            rendered.append(gr.update(interactive=has_progress_records()))
+            rendered.append(gr.update(value=detection_status_text()))
+            has_model=not skip_detection and (detection_source == 'model' or model_assets_available(options))
+            rendered.append(gr.update(
+                value=('Run Detection'
+                       if (has_model and not has_json_for_active)
+                       else 'Load Boxes from JSON'),
+                interactive=bool(has_json_for_active or detection_source == 'json' or not skip_detection),
+            ))
             return rendered
 
         def run(ctx, action, payload=None, auto_detect=True):
@@ -614,7 +669,11 @@ def create_app(options):
                     fresh=new_state()
                     fresh['revision']=updated['revision']+1
                     ctx=dict(ctx,active=fresh)
-                if auto_detect and action=='next' and updated['current_step']==3 and not updated['detection_loaded'] and not skip_detection:
+                has_json_boxes=has_detection(updated.get('image'),options.output_dir)
+                has_model=not skip_detection and (detection_source == 'model' or model_assets_available(options))
+                if (auto_detect and action=='next' and updated['current_step']==3
+                        and not updated['detection_loaded']
+                        and (has_json_boxes or has_model)):
                     try:
                         ctx=dict(ctx,active=engine.apply(updated,'detect'))
                     except Exception as exc:
@@ -717,6 +776,59 @@ def create_app(options):
             except (ValueError,OSError,KeyError,TypeError) as exc:
                 raise gr.Error(str(exc)) from exc
 
+        def save_progress(ctx):
+            try:
+                active = (ctx or {}).get('active') or {}
+                if active.get('current_step', 1) > 1 and (active.get('dirty') or active.get('history')):
+                    gr.Warning(
+                        'Ảnh hiện tại có thay đổi chưa bấm Save Annotation. '
+                        'File progress sẽ chỉ lưu bản đã lưu trên ổ đĩa '
+                        '(hoặc bản nháp Step 2 nếu đã qua Step 2).'
+                    )
+                archive = build_progress_archive(options.output_dir, images)
+                return json.dumps({
+                    'name': archive.name,
+                    'content': base64.b64encode(archive.read_bytes()).decode('ascii'),
+                })
+            except (ValueError, OSError, KeyError, TypeError) as exc:
+                raise gr.Error(str(exc)) from exc
+
+        def load_progress(ctx, uploaded_file):
+            upload_path = _uploaded_path(uploaded_file)
+            if not upload_path:
+                return render(ctx)
+            try:
+                summary = restore_progress_archive(upload_path, options.output_dir, images)
+                fresh_ctx = {'active': empty_state(), 'saved': {}}
+                msg = (
+                    f"Đã khôi phục tiến độ: {summary['restored_annotations']} bản nhãn, "
+                    f"{summary['restored_detections']} box dự đoán."
+                )
+                if summary['warnings']:
+                    msg += ' Cảnh báo: ' + '; '.join(summary['warnings'][:3])
+                    return render(fresh_ctx, WARNING + ' ' + html.escape(msg))
+                gr.Info(msg)
+                return render(fresh_ctx)
+            except (ValueError, OSError, KeyError, TypeError) as exc:
+                return render(ctx, WARNING + ' ' + html.escape(str(exc)))
+
+        def upload_detection_boxes(ctx, uploaded_file):
+            upload_path = _uploaded_path(uploaded_file)
+            if not upload_path:
+                return render(ctx)
+            try:
+                parsed = parse_detection_upload(upload_path, images)
+                store_detections(parsed.records, options.output_dir)
+                count = count_stored_detections(images, options.output_dir)
+                msg = f'Đã nạp box cho {len(parsed.records)} ảnh (tổng {count}/{len(images)} ảnh).'
+                if parsed.warnings:
+                    msg += ' Cảnh báo: ' + '; '.join(parsed.warnings[:3])
+                    return render(ctx, WARNING + ' ' + html.escape(msg))
+                gr.Info(msg)
+                return render(ctx)
+            except (ValueError, OSError, KeyError, TypeError) as exc:
+                return render(ctx, WARNING + ' ' + html.escape(str(exc)))
+
         def history_markup():
             items=[]
             processed_count=0
@@ -780,6 +892,26 @@ def create_app(options):
                 document.body.appendChild(link);link.click();link.remove();
                 setTimeout(()=>URL.revokeObjectURL(url),10000);
             }""")
+        save_progress_btn.click(
+            save_progress, [session], [download_payload],
+            concurrency_id='annotation-actions', concurrency_limit=1,
+            show_progress='hidden', js=SHOW_LOADING_JS).success(
+            fn=None, inputs=[download_payload], outputs=None, js="""(payload) => {
+                document.getElementById('global-loading')?.classList.remove('is-visible');
+                if (!payload) return;
+                const archive=JSON.parse(payload);
+                const binary=atob(archive.content);
+                const bytes=new Uint8Array(binary.length);
+                for (let i=0;i<binary.length;i++) bytes[i]=binary.charCodeAt(i);
+                const url=URL.createObjectURL(new Blob([bytes],{type:'application/zip'}));
+                const link=document.createElement('a');link.href=url;link.download=archive.name;
+                document.body.appendChild(link);link.click();link.remove();
+                setTimeout(()=>URL.revokeObjectURL(url),10000);
+            }""")
+        clear_loading_when_done(load_progress_btn.upload(
+            load_progress, [session, load_progress_btn], **event_args))
+        clear_loading_when_done(box_upload.upload(
+            upload_detection_boxes, [session, box_upload], **event_args))
         clear_loading_when_done(open_button.click(open_image,[session,image_choice],**event_args))
         for button,action in [(back,'back'),(save,'save'),(undo,'undo')]:
             clear_loading_when_done(button.click(lambda c,a=action:run(c,a),[session],**event_args))
@@ -872,8 +1004,12 @@ def create_app(options):
                 y1_value=y1_value, x2_value=x2_value, y2_value=y2_value,
                 crop_coordinates=crop_coordinates)
             state = result[0]['active']
+            can_auto_detect = (
+                has_detection(state.get('image'), options.output_dir)
+                or (not skip_detection and (detection_source == 'model' or model_assets_available(options)))
+            )
             needs_detection = (state['current_step'] == 3 and
-                               not state['detection_loaded'] and not skip_detection)
+                               not state['detection_loaded'] and can_auto_detect)
             if needs_detection:
                 result[2] = gr.update(value='Running detection…', visible=True)
                 result[29] = gr.update(interactive=False)
@@ -1110,7 +1246,7 @@ def create_app(options):
             run_detection,[session,detect_confirm],
             **dict(event_args,js="""(ctx, confirmed) => {
                 const hasBoxes=Object.keys(ctx?.active?.regions || {}).length > 0;
-                const ok = !hasBoxes || window.confirm('Run detection again and replace all existing boxes?');
+                const ok = !hasBoxes || window.confirm('Load boxes from JSON / run detection again and replace all existing boxes?');
                 if (ok) {
                     const el = document.getElementById('global-loading');
                     if (el) {
@@ -1231,7 +1367,7 @@ def create_app(options):
 
 if __name__=='__main__':
     logging.basicConfig(level=logging.INFO,format='%(levelname)s: %(message)s')
-    args=parser().parse_args()
+    args=resolve_app_paths(parser().parse_args())
     create_app(args).queue().launch(server_name=args.server_name,server_port=args.port,share=args.share,css=APP_CSS,
         theme=gr.themes.Base(font=['Arial', 'sans-serif'], font_mono=['monospace']), footer_links=[],
         allowed_paths=[str(Path(args.image_dir).resolve())])

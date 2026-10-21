@@ -30,6 +30,7 @@
   min-height: 56px;
   padding: var(--space-3, 12px) var(--space-4, 16px);
   border-bottom: 1px solid var(--color-border, #303237);
+  position: relative;
   box-sizing: border-box;
 }
 
@@ -73,6 +74,7 @@
   background-color: var(--color-page, #0b0d0f);
   background-image: radial-gradient(#303237 0.65px, transparent 0.65px);
   background-size: 12px 12px;
+  position: relative;
   box-sizing: border-box;
 }
 .image-viewport.is-panning { cursor: grab !important; }
@@ -122,6 +124,8 @@
 .status-legend span::before { flex-shrink: 0; width: 12px; height: 12px; border: 2px solid; border-radius: var(--radius-sm, 4px); content: ''; }
 .status-legend .intact { color: #22c55e; }
 .status-legend .damaged { color: #ef4444; }
+.status-legend .damaged-leveled { color: #0ea5e9; }
+.status-legend .damaged-leveled::before { border-color: #0ea5e9; background: rgb(14 165 233 / 22%); }
 .status-legend .unknown { color: #ef4444; }
 .status-legend .unknown::before {
   content: '?';
@@ -147,6 +151,116 @@
 .status-legend .suspicious::before {
   border-color: #facc15;
   background: #a16207;
+}
+
+.box-quick-popover {
+  position: absolute;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 220px;
+  max-width: 260px;
+  padding: 10px 12px;
+  border: 1px solid #3f444e;
+  border-radius: 8px;
+  background: rgb(23 25 28 / 96%);
+  box-shadow: 0 10px 28px rgb(0 0 0 / 65%);
+  backdrop-filter: blur(6px);
+  color: #f4f4f5;
+  user-select: none;
+}
+.box-quick-popover[hidden] { display: none !important; }
+.box-quick-popover-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid #2e3138;
+  font-size: 12px;
+  font-weight: 700;
+}
+.box-quick-popover-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.box-quick-popover-char {
+  font-family: var(--han-nom-font, "Vietnamica NomNaTong", "Vietnamica DengXian", sans-serif);
+  font-size: 16px;
+  font-weight: 600;
+  color: #38bdf8;
+}
+.box-quick-popover-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: #a1a1aa;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+.box-quick-popover-close:hover {
+  background: #282b30;
+  color: #f4f4f5;
+}
+.box-quick-popover-row {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+.box-quick-popover-btn {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 34px;
+  padding: 4px 6px;
+  border: 1px solid #383b42;
+  border-radius: 6px;
+  background: #1f2227;
+  color: #e4e4e7;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.15;
+  cursor: pointer;
+  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+.box-quick-popover-btn:hover:not(:disabled) {
+  border-color: #525761;
+  background: #2b2f36;
+}
+.box-quick-popover-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.box-quick-popover-btn.is-intact.is-active {
+  border-color: #22c55e;
+  background: rgb(34 197 94 / 22%);
+  color: #4ade80;
+}
+.box-quick-popover-btn.is-level.is-active {
+  border-color: #0ea5e9;
+  background: rgb(14 165 233 / 28%);
+  color: #38bdf8;
+}
+.box-quick-popover-btn.is-flag.is-active {
+  border-color: #f59e0b;
+  background: rgb(245 158 11 / 22%);
+  color: #fbbf24;
+}
+.box-quick-popover-hint {
+  margin: 0;
+  color: #9ca3af;
+  font-size: 10px;
+  text-align: center;
 }
 
 .source-preview { display: flex; flex-direction: column; gap: var(--space-3, 12px); margin: 0; padding: var(--space-6, 24px); border: 0; border-top: 1px solid var(--color-border, #303237); }
@@ -182,6 +296,7 @@
   min-height: 0;
   border-top: 0;
   border-right: 1px solid var(--color-border, #303237);
+  position: relative;
   box-sizing: border-box;
 }
 .status-order-board .review-editor {
@@ -279,6 +394,7 @@
   border: 1px solid var(--color-border, #303237);
   border-radius: var(--radius-sm, 4px);
   background: var(--color-page, #0b0d0f);
+  position: relative;
   box-sizing: border-box;
 }
 .status-order-board .order-chips {

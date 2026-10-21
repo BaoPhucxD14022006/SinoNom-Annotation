@@ -150,11 +150,13 @@ const applyImageOnlyMode = (enabled) => {
 root.addEventListener('canvas-image-only-change', event => {
   applyImageOnlyMode(event.detail);
 });
-const statusColor = (status, expert = false) => expert ? '#facc15' : status === 'damaged' ? '#ef4444' : '#22c55e';
+const hasDamageLevel = level => level === 1 || level === 2 || level === 3;
+const statusColor = (status, expert = false, damageLevel = null) =>
+  expert ? '#facc15' : status === 'damaged' ? (hasDamageLevel(damageLevel) ? '#0ea5e9' : '#ef4444') : '#22c55e';
 const textColor = box => box.unavailable_font ? '#ec4899' : box.expert_prediction ? '#facc15' : '#ffffff';
 // Status rendering and selection share opacity so hydration cannot erase Font fill.
 const statusFillOpacity = (box, missing, suspicious) =>
-  box?.unavailable_font ? '.20' : suspicious ? '.20' : missing ? '.30' : '.04';
+  box?.unavailable_font ? '.20' : suspicious ? '.20' : missing ? '.30' : (box?.status === 'damaged' && hasDamageLevel(box?.damage_level)) ? '.16' : '.04';
 const applyAnnotationColor = () => {
   if (props.value.step !== 3) return;
   element.querySelectorAll('.annotation-canvas [data-box-id]').forEach(group => {
@@ -280,7 +282,8 @@ const syncExternalControls = () => {
     }
   }
   if (props.value.step === 4) {
-    const statusRadio = root.querySelector(`#status-radio input[value="${active.status}"]`);
+    const statusRadio = active && root.querySelector(`#status-radio input[value="${active.status}"]`);
+    if (!active) return;
     if (statusRadio && !statusRadio.checked) {
       syncingStatusControl = true;
       try { statusRadio.click(); } finally { syncingStatusControl = false; }
@@ -378,7 +381,8 @@ const renderLocalStatus = (id, status, unknown = null) => {
   group.classList.toggle('suspicious-region', Boolean(box.suspicious));
   group.dataset.unknown = String(Boolean(box.unknown));
   const revealStatus = props.value.step >= 4;
-  const color = !revealStatus ? annotationColor : statusColor(status, box.expert_prediction);
+  group.dataset.damageLevel = box.damage_level ? String(box.damage_level) : '';
+  const color = !revealStatus ? annotationColor : statusColor(status, box.expert_prediction, box.damage_level);
   const rect = group.querySelector('rect:not([data-image-resize-handle])');
   if (rect) {
     const missing = rect.dataset.missing === '1';
@@ -413,6 +417,95 @@ const renderLocalStatus = (id, status, unknown = null) => {
   element.querySelectorAll(`[data-order-chip][data-assigned-box-id="${id}"] .tile-character`)
     .forEach(chip => { chip.style.color = textColor(box); });
 };
+const renderQuickStatusPopover = () => {
+  const viewport = element.querySelector('.image-viewport');
+  if (!viewport) return;
+  let popover = viewport.querySelector('.box-quick-popover');
+  if (props.value.step !== 4 || !activeBoxId || !localBoxes[activeBoxId]) {
+    if (popover) popover.hidden = true;
+    return;
+  }
+  const box = localBoxes[activeBoxId];
+  const group = groupFor(activeBoxId);
+  const rect = group?.querySelector('rect:not([data-image-resize-handle])');
+  if (!rect) {
+    if (popover) popover.hidden = true;
+    return;
+  }
+  if (!popover) {
+    popover = document.createElement('div');
+    popover.className = 'box-quick-popover';
+    viewport.appendChild(popover);
+  }
+  const chip = element.querySelector(`[data-order-chip][data-assigned-box-id="${activeBoxId}"]`);
+  const charText = chip?.dataset.character || '';
+  const isMissing = Boolean(rect.dataset.missing === '1' || chip?.classList.contains('missing') || charText === 'MISS');
+  const isExcluded = Boolean(chip?.classList.contains('excluded'));
+  const isIntact = box.status === 'intact';
+  const lvl = box.status === 'damaged' ? Number(box.damage_level || 0) : 0;
+  const canUnknown = !isMissing && charText !== '□' && charText !== '@';
+  const canFlag = !isMissing && charText !== '□';
+  const canSuspicious = Boolean(chip && !isMissing && !isExcluded && charText !== '□');
+
+  popover.innerHTML = `
+    <div class="box-quick-popover-header">
+      <span class="box-quick-popover-title">
+        <span>Box #${activeBoxId}</span>
+        <span class="box-quick-popover-char">${charText}</span>
+      </span>
+      <button type="button" class="box-quick-popover-close" data-quick-close="1" aria-label="Close">×</button>
+    </div>
+    <div class="box-quick-popover-row">
+      <button type="button" class="box-quick-popover-btn is-intact ${isIntact ? 'is-active' : ''}" data-quick-status="intact" ${charText === '□' ? 'disabled' : ''}>
+        <span>Intact</span><small>0</small>
+      </button>
+      <button type="button" class="box-quick-popover-btn is-level ${lvl === 1 ? 'is-active' : ''}" data-quick-level="1">
+        <span>1 · Nhẹ</span><small>Light</small>
+      </button>
+      <button type="button" class="box-quick-popover-btn is-level ${lvl === 2 ? 'is-active' : ''}" data-quick-level="2">
+        <span>2 · Vừa</span><small>Med</small>
+      </button>
+      <button type="button" class="box-quick-popover-btn is-level ${lvl === 3 ? 'is-active' : ''}" data-quick-level="3">
+        <span>3 · Nặng</span><small>Sev</small>
+      </button>
+    </div>
+    <div class="box-quick-popover-row">
+      <button type="button" class="box-quick-popover-btn is-flag ${box.unknown ? 'is-active' : ''}" data-quick-flag="unknown" ${!canUnknown ? 'disabled' : ''}>? Unknown</button>
+      <button type="button" class="box-quick-popover-btn is-flag ${box.unavailable_font ? 'is-active' : ''}" data-quick-flag="unavailable_font" ${!canFlag ? 'disabled' : ''}>Font</button>
+      <button type="button" class="box-quick-popover-btn is-flag ${box.expert_prediction ? 'is-active' : ''}" data-quick-flag="expert_prediction" ${!canFlag ? 'disabled' : ''}>Expert</button>
+      <button type="button" class="box-quick-popover-btn is-flag ${box.suspicious ? 'is-active' : ''}" data-quick-flag="suspicious" ${!canSuspicious ? 'disabled' : ''}>Suspicious</button>
+    </div>
+    <p class="box-quick-popover-hint">Phím tắt: 1 / 2 / 3 (Mức hư hại) · 0 (Intact)</p>
+  `;
+  popover.hidden = false;
+
+  requestAnimationFrame(() => {
+    if (popover.hidden || !rect.isConnected) return;
+    const vpRect = viewport.getBoundingClientRect();
+    const boxRect = rect.getBoundingClientRect();
+    const popW = popover.offsetWidth || 236;
+    const popH = popover.offsetHeight || 136;
+    const boxRight = boxRect.right - vpRect.left + viewport.scrollLeft;
+    const boxLeft = boxRect.left - vpRect.left + viewport.scrollLeft;
+    const boxTop = boxRect.top - vpRect.top + viewport.scrollTop;
+
+    let left = boxRight + 10;
+    const maxVisibleRight = viewport.scrollLeft + viewport.clientWidth - 8;
+    if (left + popW > maxVisibleRight) {
+      const leftCandidate = boxLeft - popW - 10;
+      left = leftCandidate >= viewport.scrollLeft + 8
+        ? leftCandidate
+        : Math.max(viewport.scrollLeft + 8, maxVisibleRight - popW);
+    }
+    const maxVisibleBottom = viewport.scrollTop + viewport.clientHeight - 8;
+    const top = Math.max(
+      viewport.scrollTop + 8,
+      Math.min(boxTop, maxVisibleBottom - popH)
+    );
+    popover.style.left = `${Math.round(left)}px`;
+    popover.style.top = `${Math.round(top)}px`;
+  });
+};
 const renderSelection = (sync = true) => {
   const showResizeHandles = selectedIds.size === 1;
   element.querySelectorAll('.annotation-canvas [data-box-id]').forEach(group => {
@@ -435,6 +528,7 @@ const renderSelection = (sync = true) => {
     chip.classList.remove('selected-chip');
   });
   if (sync) syncExternalControls();
+  renderQuickStatusPopover();
 };
 const updateCanvasLabels = () => {
   const characterByBoxId = new Map(
@@ -618,6 +712,7 @@ const fitCanvas = (width, height, focalPoint = null) => {
 
   const label = element.querySelector('.zoom-label');
   if (label) label.textContent = `${Math.round(imageTransform.zoom)}%`;
+  renderQuickStatusPopover();
 };
 const applyZoom = (focalPoint = null) => fitCanvas(undefined, undefined, focalPoint);
 let spacePressed = false;
@@ -713,8 +808,10 @@ root.addEventListener('change', event => {
     const box = localBoxes[activeBoxId];
     if (box?.status === 'damaged' && ['1', '2', '3'].includes(levelInput.value)) {
       box.damage_level = Number(levelInput.value);
+      renderLocalStatus(activeBoxId, box.status, box.unknown);
     }
     syncExternalControls();
+    renderQuickStatusPopover();
     return;
   }
   const input = event.target.closest('#status-radio input');
@@ -1192,6 +1289,7 @@ const handleOrderLostPointerCapture = event => {
 
 element.addEventListener('pointerdown', event => {
   if (pending) return;
+  if (event.target.closest('.box-quick-popover')) return;
   const isPan = event.button === 1 || (event.button === 0 && (spacePressed || (event.shiftKey && !event.target.closest('[data-box-id]'))));
   if (isPan) {
     const viewport = element.querySelector('.image-viewport');
@@ -1732,9 +1830,88 @@ root.addEventListener('click', event => {
     event.preventDefault();
     return;
   }
+  const quickClose = event.target.closest('[data-quick-close]');
+  if (quickClose && props.value.step === 4) {
+    setSelection([], null);
+    event.preventDefault();
+    return;
+  }
+  const quickIntact = event.target.closest('[data-quick-status="intact"]');
+  if (quickIntact && props.value.step === 4 && activeBoxId && localBoxes[activeBoxId]) {
+    const box = localBoxes[activeBoxId];
+    box.damage_level = null;
+    renderLocalStatus(activeBoxId, 'intact', false);
+    renderSelection();
+    event.preventDefault();
+    return;
+  }
+  const quickLevel = event.target.closest('[data-quick-level]');
+  if (quickLevel && props.value.step === 4 && activeBoxId && localBoxes[activeBoxId]) {
+    const box = localBoxes[activeBoxId];
+    const level = Number(quickLevel.dataset.quickLevel);
+    if ([1, 2, 3].includes(level)) {
+      box.status = 'damaged';
+      box.damage_level = level;
+      renderLocalStatus(activeBoxId, 'damaged', box.unknown);
+      renderSelection();
+    }
+    event.preventDefault();
+    return;
+  }
+  const quickFlag = event.target.closest('[data-quick-flag]');
+  if (quickFlag && props.value.step === 4 && activeBoxId && localBoxes[activeBoxId]) {
+    const box = localBoxes[activeBoxId];
+    const flag = quickFlag.dataset.quickFlag;
+    if (flag === 'unknown') {
+      const nextUnknown = !box.unknown;
+      if (nextUnknown) {
+        box.status = 'damaged';
+        box.unavailable_font = false;
+        box.expert_prediction = false;
+        box.suspicious = false;
+      }
+      renderLocalStatus(activeBoxId, box.status, nextUnknown);
+      renderSuspiciousPreview();
+      renderSelection();
+    } else if (flag === 'unavailable_font' || flag === 'expert_prediction') {
+      const nextVal = !box[flag];
+      if (flag === 'expert_prediction' && nextVal && !box[flag]) box.status = 'damaged';
+      box[flag] = nextVal;
+      if (nextVal) box.unknown = false;
+      renderLocalStatus(activeBoxId, box.status, box.unknown);
+      renderSelection();
+    } else if (flag === 'suspicious') {
+      box.suspicious = !box.suspicious;
+      if (box.suspicious) box.unknown = false;
+      renderSuspiciousPreview();
+      renderSelection();
+    }
+    event.preventDefault();
+    return;
+  }
 });
 
 window.addEventListener('keydown', event => {
+  const activeElem = document.activeElement;
+  const isTyping = activeElem && (activeElem.tagName === 'INPUT' || activeElem.tagName === 'TEXTAREA' || activeElem.isContentEditable);
+  if (!isTyping && props.value.step === 4 && activeBoxId && localBoxes[activeBoxId] && !event.ctrlKey && !event.metaKey && !event.altKey) {
+    const box = localBoxes[activeBoxId];
+    if (['1', '2', '3'].includes(event.key)) {
+      box.status = 'damaged';
+      box.damage_level = Number(event.key);
+      renderLocalStatus(activeBoxId, 'damaged', box.unknown);
+      renderSelection();
+      event.preventDefault();
+      return;
+    }
+    if (event.key === '0') {
+      box.damage_level = null;
+      renderLocalStatus(activeBoxId, 'intact', false);
+      renderSelection();
+      event.preventDefault();
+      return;
+    }
+  }
   if (event.key === 'Delete' || event.key === 'Backspace') {
     const activeElem = document.activeElement;
     if (activeElem && (activeElem.tagName === 'INPUT' || activeElem.tagName === 'TEXTAREA' || activeElem.isContentEditable)) {

@@ -271,6 +271,47 @@ body,
   outline: 2px solid var(--color-accent);
   outline-offset: 3px;
 }
+#header-actions #load-progress,
+#header-actions #save-progress {
+  flex: 0 0 auto !important;
+  align-self: center;
+  width: max-content !important;
+  min-width: 0 !important;
+  margin: 0;
+}
+#header-actions #load-progress button,
+#header-actions #save-progress button,
+#header-actions button#load-progress,
+#header-actions button#save-progress {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  gap: 8px;
+  width: max-content;
+  min-width: 0;
+  height: 46px;
+  min-height: 46px;
+  padding: 0 16px;
+  border: 1px solid var(--color-border);
+  border-radius: 11px;
+  background: var(--color-panel-subtle);
+  color: var(--color-text);
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  transition: background-color 160ms ease, border-color 160ms ease,
+              transform 160ms ease;
+}
+#header-actions #load-progress button:not(:disabled):hover,
+#header-actions #save-progress button:not(:disabled):hover,
+#header-actions button#load-progress:not(:disabled):hover,
+#header-actions button#save-progress:not(:disabled):hover {
+  border-color: #4a4d53;
+  background: var(--color-panel-hover);
+  transform: translateY(-1px);
+}
 
 #history-close { width: 34px; min-width: 34px; margin: 0; }
 #history-close button {
@@ -453,6 +494,21 @@ body,
 #image-start .prose h2,
 #image-start .prose p { margin: 0; }
 #image-start button { width: 100%; min-height: var(--button-height); }
+#detection-upload-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-panel-subtle);
+}
+#detection-upload-status p {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: 12px;
+  text-align: center;
+}
 
 .panel { align-self: stretch; min-width: 0; height: auto; overflow: visible; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-panel); }
 #workspace:has(#control-panel[style*="display: flex"]) > #control-panel {

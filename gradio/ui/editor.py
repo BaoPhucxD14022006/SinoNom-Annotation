@@ -7,8 +7,8 @@ from annotation.state import source_mismatch_confirmed, spatial_box_order
 from annotation.text_alignment import MISSING_ANNOTATION, count_annotation_characters
 from .icons import DOCUMENT
 
-SCRIPT = (Path(__file__).parent / 'assets/editor.js').read_text()
-CSS = (Path(__file__).parent / 'assets/editor.css').read_text()
+SCRIPT = (Path(__file__).parent / 'assets/editor.js').read_text(encoding='utf-8')
+CSS = (Path(__file__).parent / 'assets/editor.css').read_text(encoding='utf-8')
 
 
 def _review_point(point, crop, scale_x, scale_y):
@@ -195,7 +195,7 @@ def snapshot(s):
     if step in (4, 5) or (step == 7 and not other_mismatch):
         suspicious_legend=('<span class="suspicious">Suspicious content</span>'
                            if suspicious_boxes else '')
-        markup+=f'<div class="status-legend"><span class="intact">Intact</span><span class="damaged">Damaged</span><span class="unknown">Unknown (?)</span><span class="unavailable-font">Unavailable Font</span><span class="expert-prediction">Expert Prediction</span><span class="missing">MISS content</span>{suspicious_legend}</div>'
+        markup+=f'<div class="status-legend"><span class="intact">Intact</span><span class="damaged">Damaged (chưa chọn mức)</span><span class="damaged-leveled">Damaged (đã chọn 1–3)</span><span class="unknown">Unknown (?)</span><span class="unavailable-font">Unavailable Font</span><span class="expert-prediction">Expert Prediction</span><span class="missing">MISS content</span>{suspicious_legend}</div>'
     if step in (4,7) and not (step==7 and other_mismatch):
         if step == 4:
             chips=[]
