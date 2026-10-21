@@ -4,7 +4,7 @@ let sortRequestSequence = 0;
 let suppressAlignmentClick = false, alignmentClickTimer = null;
 let syncingStatusControl = false;
 let syncingCoordinateControls = false;
-let isDirty = false, pendingSortSelectedRange = null, pendingSortOverwrite = null;
+let isDirty = false, pendingSortSelectedRange = null, pendingSortOverwrite = null, pendingAddOrderBoxId = null;
 let image = props.value.image, localContext = '';
 let localBoxes = {}, selectedIds = new Set(), activeBoxId = null, activeTokenId = null;
 let localTextSequence = [], localTokenOrder = [];
@@ -37,6 +37,109 @@ const canSortBoxes = () => {
 const clearAllBoxOrders = () => {
   Object.values(localBoxes).forEach(box => { box.order = null; });
   updateCanvasLabels();
+};
+
+const deleteSelectedBoxesAndShiftOrders = () => {
+  if (!selectedIds.size) return;
+  const beforeIds = Object.keys(localBoxes);
+  const deletedCount = selectedIds.size;
+  const deletedOrders = [...selectedIds]
+    .map(id => Number(localBoxes[id]?.order))
+    .filter(o => Number.isInteger(o) && o >= 1)
+    .sort((a, b) => a - b);
+  selectedIds.forEach(id => {
+    delete localBoxes[id];
+    groupFor(id)?.remove();
+  });
+  selectedIds.clear();
+  activeBoxId = null;
+  if (deletedOrders.length > 0) {
+    Object.values(localBoxes).forEach(box => {
+      const currentOrder = Number(box.order);
+      if (Number.isInteger(currentOrder) && currentOrder >= 1) {
+        const shiftDown = deletedOrders.filter(d => d < currentOrder).length;
+        if (shiftDown > 0) box.order = currentOrder - shiftDown;
+      }
+    });
+  }
+  updateCanvasLabels();
+  mismatchConfirmationInvalidated = true;
+  clearMismatchIssueSelection();
+  isDirty = true;
+  renderSelection();
+  traceTransition(`DELETE ${deletedCount}`, beforeIds);
+};
+
+const updateAddOrderModalPreview = () => {
+  const modal = root.querySelector('#add-box-order-modal');
+  if (!modal) return;
+  const input = modal.querySelector('#add-order-modal-input');
+  const previewEl = modal.querySelector('#add-order-modal-preview');
+  const errorEl = modal.querySelector('#add-order-modal-error');
+  const confirmBtn = modal.querySelector('#add-order-modal-confirm');
+  const val = (input?.value || '').trim();
+  const targetOrder = parseInt(val, 10);
+  if (!/^\d+$/.test(val) || isNaN(targetOrder) || targetOrder < 1) {
+    if (previewEl) previewEl.textContent = '';
+    if (errorEl) { errorEl.textContent = 'Số thứ tự phải là số nguyên dương (≥ 1).'; errorEl.style.display = 'block'; }
+    if (confirmBtn) confirmBtn.disabled = true;
+    return;
+  }
+  if (errorEl) errorEl.style.display = 'none';
+  if (confirmBtn) confirmBtn.disabled = false;
+  const shiftedCount = Object.entries(localBoxes)
+    .filter(([id, b]) => id !== pendingAddOrderBoxId && Number.isInteger(Number(b.order)) && Number(b.order) >= targetOrder)
+    .length;
+  if (previewEl) {
+    previewEl.textContent = shiftedCount > 0
+      ? `Sẽ gán số #${targetOrder} và tự động +1 cho ${shiftedCount} box (từ #${targetOrder} trở đi).`
+      : `Sẽ gán số #${targetOrder} (không có box nào bị dịch).`;
+  }
+};
+
+const openAddBoxOrderModal = (newId) => {
+  const existingOrders = Object.entries(localBoxes)
+    .filter(([id, b]) => id !== newId && Number.isInteger(Number(b.order)) && Number(b.order) >= 1)
+    .map(([, b]) => Number(b.order));
+  if (!existingOrders.length && !canEditReadingOrder()) return;
+  const modal = root.querySelector('#add-box-order-modal');
+  if (!modal) return;
+  pendingAddOrderBoxId = newId;
+  const defaultOrder = existingOrders.length ? Math.max(...existingOrders) + 1 : 1;
+  const input = modal.querySelector('#add-order-modal-input');
+  if (input) {
+    input.value = String(defaultOrder);
+    setTimeout(() => { input.focus(); input.select(); }, 20);
+  }
+  modal.style.display = 'flex';
+  updateAddOrderModalPreview();
+};
+
+const confirmAddBoxOrderModal = () => {
+  const modal = root.querySelector('#add-box-order-modal');
+  const targetId = pendingAddOrderBoxId;
+  if (!modal || !targetId || !localBoxes[targetId]) {
+    if (modal) modal.style.display = 'none';
+    pendingAddOrderBoxId = null;
+    return;
+  }
+  const input = modal.querySelector('#add-order-modal-input');
+  const val = (input?.value || '').trim();
+  const targetOrder = parseInt(val, 10);
+  if (!/^\d+$/.test(val) || isNaN(targetOrder) || targetOrder < 1) return;
+  modal.style.display = 'none';
+  pendingAddOrderBoxId = null;
+  Object.entries(localBoxes).forEach(([id, box]) => {
+    if (id === targetId) return;
+    const currentOrder = Number(box.order);
+    if (Number.isInteger(currentOrder) && currentOrder >= targetOrder) {
+      box.order = currentOrder + 1;
+    }
+  });
+  localBoxes[targetId].order = targetOrder;
+  isDirty = true;
+  updateCanvasLabels();
+  renderSelection();
 };
 
 const orderedClearTargets = () => {
@@ -888,6 +991,11 @@ root.addEventListener('input', event => {
     updateSortModalPreview();
     return;
   }
+  const addOrderInput = event.target.closest('#add-order-modal-input');
+  if (addOrderInput) {
+    updateAddOrderModalPreview();
+    return;
+  }
   if (syncingCoordinateControls || props.value.step !== 3 || !activeBoxId
     || !event.target.closest('#bbox-x1 input, #bbox-y1 input, #bbox-x2 input, #bbox-y2 input')) return;
   const rawValues = ['#bbox-x1', '#bbox-y1', '#bbox-x2', '#bbox-y2'].map(selector =>
@@ -1468,7 +1576,6 @@ element.addEventListener('pointerup', event => {
       let newId;
       do { newId = `box_new_${nextTemporaryBoxId++}`; } while (localBoxes[newId]);
       localBoxes[newId] = { bbox: [...bbox], status: 'intact', damage_level: null, unknown: false, unavailable_font: false, expert_prediction: false, suspicious: false, order: null };
-      clearAllBoxOrders();
       mismatchConfirmationInvalidated = true;
       clearMismatchIssueSelection();
 
@@ -1523,6 +1630,7 @@ element.addEventListener('pointerup', event => {
 
       isDirty = true;
       setSelection([newId], newId);
+      openAddBoxOrderModal(newId);
       traceTransition('ADD', beforeIds);
     }
     return;
@@ -1669,21 +1777,7 @@ root.addEventListener('click', event => {
   if (deleteBtn) {
     event.preventDefault();
     event.stopPropagation();
-    if (!selectedIds.size) return;
-    const beforeIds = Object.keys(localBoxes);
-    const deletedCount = selectedIds.size;
-    selectedIds.forEach(id => {
-      delete localBoxes[id];
-      groupFor(id)?.remove();
-    });
-    selectedIds.clear();
-    activeBoxId = null;
-    clearAllBoxOrders();
-    mismatchConfirmationInvalidated = true;
-    clearMismatchIssueSelection();
-    isDirty = true;
-    renderSelection();
-    traceTransition(`DELETE ${deletedCount}`, beforeIds);
+    deleteSelectedBoxesAndShiftOrders();
     return;
   }
   const manualOrderContainer = event.target.closest('#manual-box-order');
@@ -1830,6 +1924,20 @@ root.addEventListener('click', event => {
     event.preventDefault();
     return;
   }
+  const skipAddOrderModal = event.target.closest('#add-order-modal-skip');
+  if (skipAddOrderModal) {
+    const modal = root.querySelector('#add-box-order-modal');
+    if (modal) modal.style.display = 'none';
+    pendingAddOrderBoxId = null;
+    event.preventDefault();
+    return;
+  }
+  const confirmAddOrderBtn = event.target.closest('#add-order-modal-confirm');
+  if (confirmAddOrderBtn) {
+    confirmAddBoxOrderModal();
+    event.preventDefault();
+    return;
+  }
   const quickClose = event.target.closest('[data-quick-close]');
   if (quickClose && props.value.step === 4) {
     setSelection([], null);
@@ -1912,26 +2020,23 @@ window.addEventListener('keydown', event => {
       return;
     }
   }
-  if (event.key === 'Delete' || event.key === 'Backspace') {
-    const activeElem = document.activeElement;
-    if (activeElem && (activeElem.tagName === 'INPUT' || activeElem.tagName === 'TEXTAREA' || activeElem.isContentEditable)) {
+  if (event.target?.closest?.('#add-order-modal-input')) {
+    if (event.key === 'Enter') {
+      confirmAddBoxOrderModal();
+      event.preventDefault();
       return;
     }
-    if (!selectedIds.size) return;
-    const beforeIds = Object.keys(localBoxes);
-    const deletedCount = selectedIds.size;
-    selectedIds.forEach(id => {
-      delete localBoxes[id];
-      groupFor(id)?.remove();
-    });
-    selectedIds.clear();
-    activeBoxId = null;
-    clearAllBoxOrders();
-    mismatchConfirmationInvalidated = true;
-    clearMismatchIssueSelection();
-    isDirty = true;
-    renderSelection();
-    traceTransition(`DELETE ${deletedCount}`, beforeIds);
+    if (event.key === 'Escape') {
+      const modal = root.querySelector('#add-box-order-modal');
+      if (modal) modal.style.display = 'none';
+      pendingAddOrderBoxId = null;
+      event.preventDefault();
+      return;
+    }
+  }
+  if (event.key === 'Delete' || event.key === 'Backspace') {
+    if (isTyping) return;
+    deleteSelectedBoxesAndShiftOrders();
     event.preventDefault();
   }
 });

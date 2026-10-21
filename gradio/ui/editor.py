@@ -291,6 +291,22 @@ def snapshot(s):
         </div>
       </div>
     </div>
+    <div id="add-box-order-modal" class="modal-backdrop" style="display:none;" role="dialog" aria-modal="true" aria-labelledby="add-order-modal-title">
+      <div class="modal-card">
+        <h3 id="add-order-modal-title">Gán số thứ tự cho Box mới</h3>
+        <p class="modal-subtitle">Nhập số thứ tự muốn gán cho box vừa thêm (các box từ vị trí này trở đi sẽ tự động +1):</p>
+        <div class="modal-form-group">
+          <label for="add-order-modal-input">Số thứ tự (Insert at order):</label>
+          <input type="number" id="add-order-modal-input" min="1" value="1" step="1" />
+          <p class="modal-range-preview" id="add-order-modal-preview"></p>
+        </div>
+        <div id="add-order-modal-error" class="modal-error-alert" style="display:none;"></div>
+        <div class="modal-actions">
+          <button type="button" id="add-order-modal-skip" class="btn btn-secondary">Để trống</button>
+          <button type="button" id="add-order-modal-confirm" class="btn btn-primary">Chèn & dịch thứ tự</button>
+        </div>
+      </div>
+    </div>
     '''
     markup+='</div>'
     calc_sorted = s.pop('calc_sorted_box_ids', None)
