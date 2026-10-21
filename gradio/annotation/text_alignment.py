@@ -1,0 +1,41 @@
+"""One normalization policy shared by counting and alignment."""
+import unicodedata
+import regex
+
+MISSING_ANNOTATION = 'MISS'
+
+
+def normalize_annotation_text(text):
+    return ''.join(c for c in unicodedata.normalize('NFC', text)
+                   if c not in '()' and not c.isspace() and (c == '@'
+                       or unicodedata.category(c) in {'Ps', 'Pe', 'Pi', 'Pf'}
+                       or not unicodedata.category(c).startswith('P')))
+
+
+def characters(text):
+    return regex.findall(r'\X', normalize_annotation_text(text))
+
+
+def count_annotation_characters(text):
+    return len(characters(text))
+
+
+def temporary_align_text(box_ids, text):
+    ids = [str(i) for i in box_ids]
+    chars = characters(text)
+    if not chars or len(ids) != len(chars) or len(set(ids)) != len(ids):
+        raise ValueError('Box and character counts must match and be nonzero; IDs must be unique.')
+    return dict(zip(ids, chars))
+
+
+def align_text_with_missing(box_ids, text):
+    """Pad source text with explicit missing-character tags for extra boxes."""
+    ids = [str(i) for i in box_ids]
+    chars = characters(text)
+    if not chars or len(ids) <= len(chars) or len(set(ids)) != len(ids):
+        raise ValueError('Missing-source alignment requires more unique box IDs than characters.')
+    return dict(zip(ids, chars + [MISSING_ANNOTATION] * (len(ids) - len(chars))))
+
+
+def validate_bbox_text_count(state):
+    return bool(characters(state['annotation_text'])) and len(state['regions']) == count_annotation_characters(state['annotation_text'])
