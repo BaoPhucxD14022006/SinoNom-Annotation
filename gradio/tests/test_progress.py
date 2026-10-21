@@ -205,6 +205,61 @@ class ProgressArchiveTests(unittest.TestCase):
         blocks = create_app(args)
         self.assertIsNotNone(blocks)
 
+    def test_app_save_and_load_progress_callbacks_replace_current_session(self):
+        import base64
+        from app import create_app, parser
+        self._populate_sample_progress()
+        args = parser().parse_args([
+            '--image-dir', str(self.image_dir),
+            '--source-json', str(self.source_json),
+            '--output-dir', str(self.output_dir),
+            '--skip-detection',
+        ])
+        blocks = create_app(args)
+        fns = {fn.fn.__name__: fn.fn for fn in blocks.fns.values() if getattr(fn, 'fn', None)}
+        save_progress_fn = fns['save_progress']
+        load_progress_fn = fns['load_progress']
+
+        # Open 12307 in Step 3 with 1 box ordered=1 (mid-progress draft, not yet saved at Step 7)
+        s_draft = self.engine.open_image(self.images[2])
+        s_draft = self.engine.apply(s_draft, 'next')
+        s_draft = self.engine.apply(s_draft, 'detect')
+        s_draft = self.engine.apply(s_draft, 'sort_boxes')
+        self.assertEqual(s_draft['current_step'], 3)
+        ctx_at_save = {
+            'active': s_draft,
+            'drafts': {s_draft['image_path']: s_draft},
+        }
+        selection_snapshot = json.dumps({
+            'boxes': s_draft['regions'],
+            'orders': {uid: box.get('order') for uid, box in s_draft['regions'].items()},
+        })
+        saved_ctx, payload_json = save_progress_fn(
+            ctx_at_save, None, None, '', selection_snapshot, 'intact', None
+        )
+        payload = json.loads(payload_json)
+        zip_path = self.root / payload['name']
+        zip_path.write_bytes(base64.b64decode(payload['content']))
+
+        # Now simulate the user continuing to modify the session in memory (e.g., advancing to Step 4)
+        s_later = self.engine.apply(saved_ctx['active'], 'next')
+        self.assertEqual(s_later['current_step'], 4)
+        s_later['revision'] = 99
+        current_ctx = {
+            'active': s_later,
+            'drafts': {s_later['image_path']: s_later},
+        }
+
+        # Load the older progress zip -> must revert active session back to Step 3 and increment revision
+        rendered = load_progress_fn(current_ctx, str(zip_path))
+        restored_ctx = rendered[0]
+        board_update = rendered[8]
+        self.assertIn('drafts', restored_ctx)
+        self.assertEqual(restored_ctx['active']['image'], '12307.jpg')
+        self.assertEqual(restored_ctx['active']['current_step'], 3)
+        self.assertEqual(restored_ctx['active']['revision'], 100)
+        self.assertTrue(board_update['value']['resetLocalState'])
+
 
 if __name__ == '__main__':
     unittest.main()

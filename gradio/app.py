@@ -324,11 +324,19 @@ def create_app(options):
             for image in images
         )
 
-    def has_progress_records():
+    def has_progress_records(ctx=None):
         output=Path(options.output_dir)
+        active=(ctx or {}).get('active') or {}
+        drafts=(ctx or {}).get('drafts') or {}
+        has_session_draft=bool(
+            (active.get('image') and active.get('current_step', 1) > 1)
+            or any(isinstance(d, dict) and d.get('image') and d.get('current_step', 1) > 1
+                   for d in drafts.values())
+        )
         return (has_saved_image_records()
                 or (output/'.state'/'content.json').is_file()
-                or count_stored_detections(images,output) > 0)
+                or count_stored_detections(images,output) > 0
+                or has_session_draft)
 
     def detection_status_text():
         loaded=count_stored_detections(images,options.output_dir)
@@ -570,7 +578,10 @@ def create_app(options):
 
         def render(ctx, msg=''):
             if msg:
-                gr.Warning(html.unescape(msg.removeprefix(WARNING).strip()))
+                try:
+                    gr.Warning(html.unescape(msg.removeprefix(WARNING).strip()))
+                except Exception:
+                    pass
                 msg=''
             s=ctx['active']; step=s['current_step']; has=bool(s.get('image'))
             fields=(content_fields(
@@ -637,7 +648,7 @@ def create_app(options):
             rendered.append(gr.update(interactive=has_saved_image_records()))
             rendered.append(gr.update(value=s.get('image_path') if step == 1 else None))
             has_json_for_active=bool(has and has_detection(s.get('image'),options.output_dir))
-            rendered.append(gr.update(interactive=has_progress_records()))
+            rendered.append(gr.update(interactive=has_progress_records(ctx)))
             rendered.append(gr.update(value=detection_status_text()))
             has_model=not skip_detection and (detection_source == 'model' or model_assets_available(options))
             rendered.append(gr.update(
@@ -776,20 +787,83 @@ def create_app(options):
             except (ValueError,OSError,KeyError,TypeError) as exc:
                 raise gr.Error(str(exc)) from exc
 
-        def save_progress(ctx):
+        def _sync_live_step_for_progress(ctx, content_draft=None, issue_type=None,
+                                         mismatch_note_value='', selection='{}',
+                                         status_value='intact', crop_coordinates=None):
+            working = deepcopy(ctx or {'active': new_state(), 'drafts': {}})
+            working.setdefault('drafts', {})
+            active = working.get('active') or new_state()
+            step = active.get('current_step', 1)
+            if not active.get('image') or step <= 1:
+                return working
             try:
-                active = (ctx or {}).get('active') or {}
-                if active.get('current_step', 1) > 1 and (active.get('dirty') or active.get('history')):
-                    gr.Warning(
-                        'Ảnh hiện tại có thay đổi chưa bấm Save Annotation. '
-                        'File progress sẽ chỉ lưu bản đã lưu trên ổ đĩa '
-                        '(hoặc bản nháp Step 2 nếu đã qua Step 2).'
-                    )
-                archive = build_progress_archive(options.output_dir, images)
-                return json.dumps({
+                if step == 2 and content_draft:
+                    working = commit_frontend_content(working, content_draft)
+                elif step == 3:
+                    working, _, _ = commit_frontend_boxes(
+                        working, selection, materialize_alignment=True)
+                    if (not working['active']['workflow']['bbox_valid']
+                            and not source_mismatch_confirmed(working['active'])
+                            and issue_type):
+                        try:
+                            updated = engine.apply(
+                                working['active'], 'confirm_source_mismatch',
+                                {'issue_type': issue_type, 'note': mismatch_note_value or ''})
+                            working = dict(working, active=updated)
+                        except Exception:
+                            pass
+                elif step == 4:
+                    working = commit_status_order(working, selection, status_value)
+                elif step == 6:
+                    crop_value = (sidebar_crop(crop_coordinates)
+                                  if crop_coordinates not in (None, '')
+                                  else frontend_crop(selection))
+                    if crop_value is not None:
+                        updated = engine.apply(working['active'], 'crop', {'bbox': crop_value})
+                        working = dict(working, active=updated)
+            except Exception as exc:
+                log.warning('Could not sync live step state during save_progress: %s', exc)
+            if working['active'].get('image_path') and working['active'].get('current_step', 1) > 1:
+                working['drafts'][working['active']['image_path']] = deepcopy(working['active'])
+            return working
+
+        def _rehydrate_draft_state(saved_state, by_name, by_stem):
+            if not isinstance(saved_state, dict):
+                return None
+            raw_img = saved_state.get('image')
+            if not isinstance(raw_img, str) or not raw_img.strip():
+                return None
+            token = Path(raw_img.replace('\\', '/')).name
+            matched = by_name.get(token) or by_stem.get(Path(token).stem)
+            if matched is None:
+                return None
+            base = engine.open_image(str(matched))
+            preserve_keys = {
+                'image', 'image_path', 'image_size',
+                'preview_dir', 'image_url', 'content_preview_url',
+            }
+            for k, v in saved_state.items():
+                if k not in preserve_keys:
+                    base[k] = deepcopy(v)
+            return base
+
+        def save_progress(ctx, content_draft=None, issue_type=None,
+                          mismatch_note_value='', selection='{}',
+                          status_value='intact', crop_coordinates=None):
+            try:
+                working_ctx = _sync_live_step_for_progress(
+                    ctx, content_draft=content_draft, issue_type=issue_type,
+                    mismatch_note_value=mismatch_note_value, selection=selection,
+                    status_value=status_value, crop_coordinates=crop_coordinates)
+                archive = build_progress_archive(
+                    options.output_dir, images,
+                    titles=engine.verification_titles,
+                    session_ctx=working_ctx)
+                payload = json.dumps({
                     'name': archive.name,
                     'content': base64.b64encode(archive.read_bytes()).decode('ascii'),
                 })
+                return working_ctx, payload
             except (ValueError, OSError, KeyError, TypeError) as exc:
                 raise gr.Error(str(exc)) from exc
 
@@ -798,16 +872,59 @@ def create_app(options):
             if not upload_path:
                 return render(ctx)
             try:
-                summary = restore_progress_archive(upload_path, options.output_dir, images)
-                fresh_ctx = {'active': empty_state(), 'saved': {}}
+                summary = restore_progress_archive(
+                    upload_path, options.output_dir, images,
+                    titles=engine.verification_titles,
+                    annotation_title=engine.annotation_title)
+                old_active = (ctx or {}).get('active') or {}
+                old_rev = int(old_active.get('revision', 0))
+                by_name = {p.resolve().name: p.resolve() for p in images}
+                by_stem = {p.resolve().stem: p.resolve() for p in images}
+                fresh_drafts = {}
+                session_drafts = summary.get('session_drafts') or {}
+                raw_drafts = (session_drafts.get('drafts')
+                              if isinstance(session_drafts, dict) else {})
+                if isinstance(raw_drafts, dict):
+                    for _, draft_state in raw_drafts.items():
+                        try:
+                            rehydrated = _rehydrate_draft_state(draft_state, by_name, by_stem)
+                            if rehydrated and rehydrated.get('image_path'):
+                                rehydrated['revision'] = old_rev + 1
+                                fresh_drafts[rehydrated['image_path']] = rehydrated
+                        except Exception as exc:
+                            log.warning('Could not rehydrate draft state: %s', exc)
+                fresh_active = None
+                active_img_name = (session_drafts.get('active_image')
+                                   if isinstance(session_drafts, dict) else None)
+                if isinstance(active_img_name, str) and active_img_name:
+                    token = Path(active_img_name.replace('\\', '/')).name
+                    matched_active = by_name.get(token) or by_stem.get(Path(token).stem)
+                    if matched_active and str(matched_active) in fresh_drafts:
+                        fresh_active = deepcopy(fresh_drafts[str(matched_active)])
+                if fresh_active is None:
+                    old_path = old_active.get('image_path')
+                    if old_path and old_active.get('current_step', 1) > 1 and Path(old_path).is_file():
+                        if old_path in fresh_drafts:
+                            fresh_active = deepcopy(fresh_drafts[old_path])
+                        else:
+                            fresh_active = engine.open_image(old_path)
+                    else:
+                        fresh_active = new_state()
+                fresh_active['revision'] = old_rev + 1
+                fresh_active['reset_local_state'] = True
+                fresh_ctx = {'active': fresh_active, 'drafts': fresh_drafts}
                 msg = (
                     f"Đã khôi phục tiến độ: {summary['restored_annotations']} bản nhãn, "
-                    f"{summary['restored_detections']} box dự đoán."
+                    f"{summary['restored_detections']} box dự đoán"
+                    + (f", {len(fresh_drafts)} bản nháp đang làm." if fresh_drafts else ".")
                 )
                 if summary['warnings']:
                     msg += ' Cảnh báo: ' + '; '.join(summary['warnings'][:3])
                     return render(fresh_ctx, WARNING + ' ' + html.escape(msg))
-                gr.Info(msg)
+                try:
+                    gr.Info(msg)
+                except Exception:
+                    pass
                 return render(fresh_ctx)
             except (ValueError, OSError, KeyError, TypeError) as exc:
                 return render(ctx, WARNING + ' ' + html.escape(str(exc)))
@@ -824,7 +941,10 @@ def create_app(options):
                 if parsed.warnings:
                     msg += ' Cảnh báo: ' + '; '.join(parsed.warnings[:3])
                     return render(ctx, WARNING + ' ' + html.escape(msg))
-                gr.Info(msg)
+                try:
+                    gr.Info(msg)
+                except Exception:
+                    pass
                 return render(ctx)
             except (ValueError, OSError, KeyError, TypeError) as exc:
                 return render(ctx, WARNING + ' ' + html.escape(str(exc)))
@@ -893,9 +1013,13 @@ def create_app(options):
                 setTimeout(()=>URL.revokeObjectURL(url),10000);
             }""")
         save_progress_btn.click(
-            save_progress, [session], [download_payload],
+            save_progress,
+            [session, content_bridge, mismatch_type, mismatch_note,
+             selection_bridge, status, crop_coords],
+            [session, download_payload],
             concurrency_id='annotation-actions', concurrency_limit=1,
-            show_progress='hidden', js=SHOW_LOADING_JS).success(
+            show_progress='hidden',
+            js=snapshot_board_state_js(4, label_text='Saving progress…')).success(
             fn=None, inputs=[download_payload], outputs=None, js="""(payload) => {
                 document.getElementById('global-loading')?.classList.remove('is-visible');
                 if (!payload) return;

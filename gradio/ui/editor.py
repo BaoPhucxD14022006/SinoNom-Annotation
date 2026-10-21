@@ -164,7 +164,7 @@ def snapshot(s):
                         '.04')
         public_box = step not in (6,) and not other_mismatch
         if step == 3:
-            public_id = s.get('box_id_by_region', {}).get(key)
+            public_id = s.get('box_id_by_region', {}).get(key) or (str(b['order']) if b.get('order') is not None else None)
             label = html.escape(public_id) if public_id else ''
         else:
             label=html.escape(key+' '+s['annotations'].get(key,'')) if public_box else ''
@@ -310,9 +310,11 @@ def snapshot(s):
     '''
     markup+='</div>'
     calc_sorted = s.pop('calc_sorted_box_ids', None)
+    reset_local = bool(s.pop('reset_local_state', False))
     return dict(markup=markup,revision=s['revision'], image=s['image'], step=step,
                 width=canvas_w,height=canvas_h,boxes=boxes,selected=selected_id,selectedIds=list(selected_ids),
                 calcSortedBoxIds=calc_sorted,
+                resetLocalState=reset_local,
                 bboxValid=s['workflow'].get('bbox_valid', False),
                 contentVerified=s['workflow'].get('content_verified', False),
                 characterCount=count_annotation_characters(s['annotation_text']),

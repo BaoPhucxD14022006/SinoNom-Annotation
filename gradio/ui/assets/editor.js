@@ -683,7 +683,10 @@ const hydrateLocalState = () => {
   alignmentStateReady = false;
   alignmentContainer = null;
   alignmentCanvas = null;
-  const preserveSelection = context === localContext;
+  const preserveSelection = !props.value.resetLocalState && context === localContext;
+  if (props.value.resetLocalState) {
+    props.value.resetLocalState = false;
+  }
   const preserveOrder = preserveSelection && ['select', 'suspicious'].includes(pendingAction);
   const previousBoxes = localBoxes;
   if (['sort_boxes_calc', 'commit_boxes'].includes(pendingAction) && preserveSelection) {

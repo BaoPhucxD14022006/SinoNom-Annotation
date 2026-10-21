@@ -79,7 +79,10 @@ def _load_regions(state, document):
     state['region_uid_by_box_id'] = {}
     for box_id, box in document['bounding_boxes'].items():
         uid = uuid4().hex
-        state['regions'][uid] = deepcopy(box)
+        region = deepcopy(box)
+        if region.get('order') is None and str(box_id).isdigit():
+            region['order'] = int(box_id)
+        state['regions'][uid] = region
         state['box_id_by_region'][uid] = box_id
         state['region_uid_by_box_id'][box_id] = uid
     state['bounding_boxes'] = deepcopy(document['bounding_boxes'])

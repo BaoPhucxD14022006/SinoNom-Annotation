@@ -27,6 +27,10 @@ EXPORT_JSON_NAMES = frozenset({
     'source_mismatches.json',
 })
 MANIFEST_NAME = 'progress_manifest.json'
+SESSION_DRAFTS_PATH = '.state/session_drafts.json'
+_PORTABLE_STATE_SKIP_KEYS = frozenset({
+    'image_path', 'preview_dir', 'image_url', 'content_preview_url',
+})
 
 
 def _fingerprint(text):
@@ -151,7 +155,50 @@ def _normalize_output_and_images(first, second):
     return first, second
 
 
-def build_progress_archive(output_dir, images, config_info=None, archive_path=None, titles=None):
+def _serialize_session_ctx(session_ctx, image_list):
+    if not isinstance(session_ctx, dict):
+        return None
+    by_name = {Path(p).resolve().name: Path(p).resolve() for p in image_list}
+    by_path = {str(Path(p).resolve()): Path(p).resolve() for p in image_list}
+    drafts_out = {}
+
+    def _clean_state(state):
+        if not isinstance(state, dict) or not state.get('image'):
+            return None
+        if state.get('current_step', 1) <= 1:
+            return None
+        img_name = state.get('image')
+        matched = by_name.get(img_name) or by_path.get(str(state.get('image_path') or ''))
+        if matched is None:
+            return None
+        cleaned = {
+            k: deepcopy(v)
+            for k, v in state.items()
+            if k not in _PORTABLE_STATE_SKIP_KEYS
+        }
+        cleaned['image'] = matched.name
+        return matched.name, cleaned
+
+    for raw_draft in (session_ctx.get('drafts') or {}).values():
+        pair = _clean_state(raw_draft)
+        if pair:
+            drafts_out[pair[0]] = pair[1]
+
+    active_image = None
+    active_pair = _clean_state(session_ctx.get('active'))
+    if active_pair:
+        active_image = active_pair[0]
+        drafts_out[active_pair[0]] = active_pair[1]
+
+    if not drafts_out and not active_image:
+        return None
+    return {
+        'active_image': active_image,
+        'drafts': drafts_out,
+    }
+
+
+def build_progress_archive(output_dir, images, config_info=None, archive_path=None, titles=None, session_ctx=None):
     """Package committed annotations, mismatches, content, sidecar hashes, and uploaded detections into a ZIP."""
     output_dir, images = _normalize_output_and_images(output_dir, images)
     image_list = _resolve_images(images)
@@ -215,6 +262,10 @@ def build_progress_archive(output_dir, images, config_info=None, archive_path=No
                 det_doc = read_json(det_file)
                 files_to_write[f'.state/detections/{det_file.stem}.json'] = det_doc
                 detection_images.append(by_stem[det_file.stem].name)
+
+    serialized_session = _serialize_session_ctx(session_ctx, image_list)
+    if serialized_session:
+        files_to_write[SESSION_DRAFTS_PATH] = serialized_session
 
     if not files_to_write:
         raise ValueError('No saved annotations or uploaded detections to save.')
@@ -305,6 +356,7 @@ def split_export_archive(archive_path, output_dir, images, titles=None,
     valid_mismatches = {}
     content_by_stem = {}
     content_order = []
+    session_drafts = None
 
     for item in raw_contents:
         if not isinstance(item, dict) or not isinstance(item.get('image'), str):
@@ -399,6 +451,8 @@ def split_export_archive(archive_path, output_dir, images, titles=None,
         'restored_mismatches': len(valid_mismatches),
         'restored_content': len(content_order),
         'restored_detections': 0,
+        'restored_drafts': 0,
+        'session_drafts': None,
         'skipped': skipped_sorted,
         'warnings': [f'Skipped unknown images: {", ".join(skipped_sorted)}'] if skipped_sorted else [],
         'backup_dir': str(backup_dir) if backup_dir else None,
@@ -424,6 +478,7 @@ def restore_progress_archive(archive_path, output_dir, images, titles=None,
     valid_detections = {}
     content_by_stem = {}
     content_order = []
+    session_drafts = None
 
     for rel_path, data in entries.items():
         parts = PurePosixPath(rel_path).parts
@@ -478,6 +533,12 @@ def restore_progress_archive(archive_path, output_dir, images, titles=None,
                     validate_content_document(normalized, matched.name, titles)
                 content_by_stem[stem] = normalized
                 content_order.append(stem)
+            continue
+
+        if rel_path == SESSION_DRAFTS_PATH:
+            if not isinstance(data, dict):
+                raise ValueError('Invalid session drafts in progress archive.')
+            session_drafts = data
             continue
 
         if len(parts) == 2 and parts[0] == '.state' and parts[1].endswith('.json'):
@@ -538,6 +599,9 @@ def restore_progress_archive(archive_path, output_dir, images, titles=None,
     for stem, det_doc in valid_detections.items():
         atomic_write(output / '.state' / 'detections' / f'{stem}.json', det_doc)
 
+    if session_drafts:
+        atomic_write(output / '.state' / 'session_drafts.json', session_drafts)
+
     skipped_sorted = sorted(set(skipped))
     return {
         'mode': 'progress',
@@ -546,6 +610,8 @@ def restore_progress_archive(archive_path, output_dir, images, titles=None,
         'restored_mismatches': len(valid_mismatches),
         'restored_content': len(content_order),
         'restored_detections': len(valid_detections),
+        'restored_drafts': len((session_drafts or {}).get('drafts') or {}),
+        'session_drafts': session_drafts,
         'skipped': skipped_sorted,
         'warnings': [f'Skipped unknown images: {", ".join(skipped_sorted)}'] if skipped_sorted else [],
         'backup_dir': str(backup_dir) if backup_dir else None,
